@@ -1,6 +1,8 @@
 (ns kinect.usb
+  (:require [clojure.core.async :refer :all
+             :exclude [map into reduce merge take partition partition-by]])
   (:import (org.usb4java LibUsb Device DeviceList DeviceHandle)
-           (org.usb4java DescriptorUtils)))
+           (org.usb4java HotplugCallback HotplugCallbackHandle)))
 
 (defprotocol UsbDevice
   (open [device] [device interface]))
@@ -12,6 +14,8 @@
 (defn exit
   []
   (LibUsb/exit nil))
+
+(defonce ctx (init))
 
 (defn must-detach?
   [handle interface-num]
@@ -84,7 +88,7 @@
 
 (defn decode-bcd
   [bcd]
-  (DescriptorUtils/decodeBCD bcd))
+  (org.usb4java.DescriptorUtils/decodeBCD bcd))
 
 (defn usb-version
   [device]
@@ -94,4 +98,34 @@
   []
   (into [] (filter #(= (usb-version %) "3.00")) (devices)))
 
+(defn hotplug-chan
+  []
+  (assert (LibUsb/hasCapability LibUsb/CAP_HAS_HOTPLUG)
+          "The current machine does not support hotplugged USB devices")
 
+  (let [abort? (volatile! false)
+        abort (chan 1 (map #(vreset! abort? %)))]
+    (thread
+      (let [cb (reify HotplugCallback
+                 (processEvent [this ctx device event user-data]
+                   (if (== event LibUsb/HOTPLUG_EVENT_DEVICE_ARRIVED)
+                     (print "CONNECTED: ")
+                     (print "DISCONNECTED: "))
+                   (println (device-descriptor device))
+                   (int 0)))
+            cb-handle (HotplugCallbackHandle.)
+            result (LibUsb/hotplugRegisterCallback
+                    ctx
+                    (bit-or LibUsb/HOTPLUG_EVENT_DEVICE_ARRIVED
+                            LibUsb/HOTPLUG_EVENT_DEVICE_LEFT)
+                    LibUsb/HOTPLUG_ENUMERATE
+                    LibUsb/HOTPLUG_MATCH_ANY
+                    LibUsb/HOTPLUG_MATCH_ANY
+                    LibUsb/HOTPLUG_MATCH_ANY
+                    cb nil cb-handle)]
+        (assert (== result LibUsb/SUCCESS) "Unable to configure hotplug")
+        (while (not @abort?)
+          (assert (== (LibUsb/handleEventsTimeout ctx 1000000)
+                      LibUsb/SUCCESS) "libusb event handler failed"))
+        (LibUsb/hotplugDeregisterCallback ctx cb-handle)))
+    abort))

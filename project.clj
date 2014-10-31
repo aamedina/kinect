@@ -11,4 +11,5 @@
   :jvm-opts ["-server" "-Djava.library.path=native/macosx"]
   :profiles {:dev {:dependencies [[org.clojure/tools.namespace "0.2.7"]]
                    :source-paths ["dev"]}}
-  :resource-paths ["resources" "resources/opencv-249.jar"])
+  :resource-paths ["resources" "resources/opencv-249.jar"]
+  :main kinect.core)
