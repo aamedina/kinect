@@ -11,7 +11,8 @@
    [clojure.string :as str]
    [clojure.test :as test]
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
-   [kinect.core]))
+   [kinect.core]
+   [kinect.usb :as usb]))
 
 (def system
   "A Var containing an object representing the application under
