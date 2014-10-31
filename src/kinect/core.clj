@@ -7,9 +7,8 @@
 (defn -main
   [& args]
   (usb/init)
-  (let [abort (usb/hotplug-chan)]    
+  (let [abort (usb/hotplug-chan)]
     (println "Press enter to exit the program")
-    (flush)
-    (read)
+    (read-line)
     (put! abort true)
     (usb/exit)))

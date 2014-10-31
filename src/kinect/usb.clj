@@ -127,5 +127,6 @@
         (while (not @abort?)
           (assert (== (LibUsb/handleEventsTimeout ctx 1000000)
                       LibUsb/SUCCESS) "libusb event handler failed"))
+        (println "Deregistering libusb event handler...")
         (LibUsb/hotplugDeregisterCallback ctx cb-handle)))
     abort))
