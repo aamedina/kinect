@@ -1,8 +1,10 @@
 (ns kinect.usb
   (:require [clojure.core.async :refer :all
-             :exclude [map into reduce merge take partition partition-by]])
+             :exclude [map into reduce merge take partition partition-by]]
+            [clojure.core.async.impl.protocols :as impl])
   (:import (org.usb4java LibUsb Device DeviceList DeviceHandle)
-           (org.usb4java HotplugCallback HotplugCallbackHandle)))
+           (org.usb4java HotplugCallback HotplugCallbackHandle)
+           (org.usb4java DeviceDescriptor)))
 
 (defprotocol UsbDevice
   (open [device] [device interface]))
@@ -34,6 +36,8 @@
     (assert (== (LibUsb/attachKernelDriver handle interface-num) LibUsb/SUCCESS)
             "Unable to re-attach USB kernel driver")))
 
+(declare device-descriptor decode-bcd usb-version)
+
 (defn usb-device
   [device]
   (let [handle (volatile! nil)
@@ -64,7 +68,20 @@
           (vreset! interface nil))
         (when-let [h @handle]
           (LibUsb/close h)
-          (vreset! handle nil))))))
+          (vreset! handle nil)))
+
+      clojure.lang.ILookup
+      (valAt [this key] (.valAt this key nil))
+      (valAt [this key not-found]
+        (let [d (device-descriptor this)]
+          (case key
+            :spec (decode-bcd (.bcdDevice d))
+            :device (decode-bcd (.bcdUSB d))
+            :device-class (.bDeviceClass d)
+            :device-subclass (.bDeviceSubClass d)
+            :vendor-id (.idVendor d)
+            :product-id (.idProduct d)
+            not-found))))))
 
 (defn devices
   []
@@ -98,20 +115,16 @@
   []
   (into [] (filter #(= (usb-version %) "3.00")) (devices)))
 
-(defn hotplug-chan
-  []
+(defn hotplug-event-stream
+  [xform]
   (assert (LibUsb/hasCapability LibUsb/CAP_HAS_HOTPLUG)
           "The current machine does not support hotplugged USB devices")
 
-  (let [abort? (volatile! false)
-        abort (chan 1 (map #(vreset! abort? %)))]
-    (thread
+  (let [out (chan 1 xform)]
+    (future
       (let [cb (reify HotplugCallback
                  (processEvent [this ctx device event user-data]
-                   (if (== event LibUsb/HOTPLUG_EVENT_DEVICE_ARRIVED)
-                     (print "CONNECTED: ")
-                     (print "DISCONNECTED: "))
-                   (println (device-descriptor device))
+                   (put! out (usb-device device))
                    (int 0)))
             cb-handle (HotplugCallbackHandle.)
             result (LibUsb/hotplugRegisterCallback
@@ -124,9 +137,9 @@
                     LibUsb/HOTPLUG_MATCH_ANY
                     cb nil cb-handle)]
         (assert (== result LibUsb/SUCCESS) "Unable to configure hotplug")
-        (while (not @abort?)
+        (while (not (impl/closed? out))
           (assert (== (LibUsb/handleEventsTimeout ctx 1000000)
                       LibUsb/SUCCESS) "libusb event handler failed"))
         (println "Deregistering libusb event handler...")
         (LibUsb/hotplugDeregisterCallback ctx cb-handle)))
-    abort))
+    out))
