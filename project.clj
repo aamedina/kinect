@@ -10,4 +10,5 @@
                  [aleph "0.4.0-alpha7"]]
   :jvm-opts ["-server" "-Djava.library.path=native/macosx"]
   :profiles {:dev {:dependencies [[org.clojure/tools.namespace "0.2.7"]]
-                   :source-paths ["dev"]}})
+                   :source-paths ["dev"]}}
+  :resource-paths ["resources" "resources/opencv-249.jar"])
