@@ -1,5 +1,6 @@
 (ns kinect.usb
-  (:import (org.usb4java LibUsb Device DeviceList DeviceHandle)))
+  (:import (org.usb4java LibUsb Device DeviceList DeviceHandle)
+           (org.usb4java DescriptorUtils)))
 
 (defn init
   []
@@ -18,11 +19,25 @@
     (LibUsb/freeDeviceList device-list true)
     usb-devices))
 
-(defmethod print-method org.usb4java.Device
-  [device writer]
+(defn device-descriptor
+  [device]
   (let [descriptor (org.usb4java.DeviceDescriptor.)]
     (assert (== (LibUsb/getDeviceDescriptor device descriptor) LibUsb/SUCCESS)
             "Unable to read device descriptor")
-    (.write writer (.dump descriptor))))
+    descriptor))
 
+(defmethod print-method org.usb4java.Device
+  [device writer]
+  (.write writer (.dump (device-descriptor device))))
 
+(defn decode-bcd
+  [bcd]
+  (DescriptorUtils/decodeBCD bcd))
+
+(defn usb-version
+  [device]
+  (decode-bcd (.bcdUSB (device-descriptor device))))
+
+(defn usb3-devices
+  []
+  (into [] (filter #(= (usb-version %) "3.00")) (devices)))
