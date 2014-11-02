@@ -130,8 +130,8 @@
     (assert (>= code1 0) "Failed to set first power state")
     (assert (>= code2 0) "Failed to set second power state")))
 
-(defn set-video-transfer-function-state
-  []
+(defn set-video-transfer-function-enabled
+  [enabled?]
   (let [opts (bit-or 0 1 2)
         code (LibUsb/controlTransfer *handle*
                                      LibUsb/RECIPIENT_INTERFACE
@@ -145,9 +145,6 @@
   (doto (LibUsb/openDeviceWithVidPid nil 0x045e 0x02c4)
     (LibUsb/resetDevice)))
 
-(defn endpoint-descriptor
-  [])
-
 (defmacro with-companion-descriptor
   [[binding endpoint-desc] & body]
   `(let [~binding (org.usb4java.SsEndpointCompanionDescriptor.)
@@ -159,22 +156,37 @@
      (LibUsb/freeSsEndpointCompanionDescriptor ~binding)
      ret#))
 
+(defn matches-endpoint?
+  [endpoint-descriptor endpoint]
+  (and (== (.bEndpointAddress endpoint-descriptor)
+           (unchecked-byte endpoint))
+       (== (bit-and (.bmAttributes endpoint-descriptor) 0x3)
+           LibUsb/TRANSFER_TYPE_ISOCHRONOUS)))
+
+(defn bytes-per-interval
+  [iface-d endpoint]
+  (when-let [e (first (into [] (comp (map #(aget (.endpoint iface-d) %))
+                                     (filter #(matches-endpoint? % endpoint)))
+                            (range (.bNumEndpoints iface-d))))]
+    (with-companion-descriptor [d e]
+      (.wBytesPerInterval d))))
+
 (defn ir-max-iso-packet-size
   []
   (with-config-descriptor [d 1]
-    (dotimes [i (.bNumInterfaces d)]
-      (let [iface (aget (.iface d) i)]
-        (when (> (.numAltsetting iface) 1)
-          (let [iface-d (aget (.altsetting iface) 1)]
-            (dotimes [idx (.bNumEndpoints iface-d)]
-              (let [e (aget (.endpoint iface-d) idx)]
-                (when (and (== (.bEndpointAddress e)
-                               (unchecked-byte 0x84))
-                           (== (bit-and (.bmAttributes e) 0x3)
-                               LibUsb/TRANSFER_TYPE_ISOCHRONOUS))
-                  (with-companion-descriptor [d e]
-                    (assert (>= (.wBytesPerInterval d) (unchecked-short 0x8400))
-                            "IR bytes per interval too small")))))))))))
+    (let [xform (comp (map (fn [i] (aget (.iface d) i)))
+                      (filter (fn [iface] (> (.numAltsetting iface) 1)))
+                      (map (fn [iface] (aget (.altsetting iface) 1)))
+                      (map (fn [iface-d] (bytes-per-interval iface-d 0x84)))
+                      (remove nil?))
+          size (first (into [] xform (range (.bNumInterfaces d))))]
+      (assert (>= size (unchecked-short 0x8400))
+              "IR bytes per interval too small")
+      size)))
+
+(defn set-ir-interface-enabled
+  [enabled?]
+  (assert-success (LibUsb/setInterfaceAltSetting *handle* 1 (if enabled? 1 0))))
 
 (defmacro with-kinect
   [& body]
@@ -184,16 +196,10 @@
          (let [ret# (do (with-interface 0
                           (with-interface 1
                             (set-isochronous-delay)
-                            (LibUsb/setInterfaceAltSetting *handle* 1 0)
+                            (set-ir-interface-enabled false)
                             (enable-power-states)
-                            (set-video-transfer-function-state)
+                            (set-video-transfer-function-enabled false)
                             (ir-max-iso-packet-size)
                             ~@body)))]
            (LibUsb/close *handle*)
            ret#)))))
-
-;; (let [endpoint-desc (org.usb4java.EndpointDescriptor.)]
-;;   (when-not (nil? endpoint-desc)
-;;     (with-companion-descriptor [d endpoint-desc]
-;;       (.wBytesPerInterval d)))
-;;   )
