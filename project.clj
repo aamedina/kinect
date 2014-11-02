@@ -5,6 +5,7 @@
             :url "https://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.7.0-alpha3"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
+                 [org.clojure/tools.logging "0.3.1"]
                  [com.cognitect/transit-clj "0.8.259"]
                  [org.usb4java/usb4java "1.2.0"]
                  [aleph "0.4.0-alpha7"]]

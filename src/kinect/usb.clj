@@ -1,145 +1,86 @@
 (ns kinect.usb
   (:require [clojure.core.async :refer :all
              :exclude [map into reduce merge take partition partition-by]]
-            [clojure.core.async.impl.protocols :as impl])
-  (:import (org.usb4java LibUsb Device DeviceList DeviceHandle)
-           (org.usb4java HotplugCallback HotplugCallbackHandle)
-           (org.usb4java DeviceDescriptor)))
+            [clojure.core.async.impl.protocols :as impl]
+            [clojure.tools.logging :as log])
+  (:import (java.nio ByteBuffer ByteOrder)
+           (io.netty.buffer ByteBuf Unpooled ByteBufUtil)
+           (org.usb4java LibUsb Device DeviceList DeviceHandle
+                         HotplugCallback HotplugCallbackHandle
+                         DeviceDescriptor Transfer TransferCallback)))
 
-(defprotocol UsbDevice
-  (open [device] [device interface]))
+(def kinect-usb-device
+  {:vendor-id 0x045e
+   :product-id 0x02c4
+   :max-packet-size 0x40
+   :control-in-interface 0x81
+   :control-out-interface 0x02
+   :rgb-transfer-in-interface 0x83
+   :unknown-interrupt-interface 0x82
+   :isochronous-ir-transfer-in-interface 0x84})
 
-(defn init
-  []
-  (assert (== (LibUsb/init nil) LibUsb/SUCCESS) "Unable to initialize libusb"))
+(def ^:dynamic *kinect* nil)
+(def ^:dynamic *context* nil)
+(def ^:dynamic *handle* nil)
+(def ^:dynamic *interface* nil)
 
-(defn exit
-  []
-  (LibUsb/exit nil))
+(defn assert-success
+  [code]
+  (assert (zero? code) (org.usb4java.LibUsbException. code)))
 
-(defonce ctx (init))
+(defmacro with-context
+  [& body]
+  `(binding [*context* (org.usb4java.Context.)]
+     (LibUsb/init *context*)
+     (LibUsb/setDebug *context* LibUsb/LOG_LEVEL_INFO)
+     (let [ret# (do ~@body)]
+       (LibUsb/exit *context*)
+       ret#)))
 
-(defn must-detach?
-  [handle interface-num]
-  (and (LibUsb/hasCapability LibUsb/CAP_SUPPORTS_DETACH_KERNEL_DRIVER)
-       (LibUsb/kernelDriverActive handle interface-num)))
+(defmacro with-devices
+  [binding & body]
+  `(let [~binding (org.usb4java.DeviceList.)
+         code# (LibUsb/getDeviceList *context* ~binding)
+         _# (assert (>= code# 0) (org.usb4java.LibUsbException. code#))
+         ret# (do ~@body)]
+     (LibUsb/freeDeviceList ~binding true)
+     ret#))
 
-(defn ensure-kernel-detached
-  [handle interface-num]
-  (when (and handle interface-num (must-detach? handle interface-num))
-    (assert (== (LibUsb/detachKernelDriver handle interface-num) LibUsb/SUCCESS)
-            "Unable to detach USB kernel driver")))
-
-(defn ensure-kernel-reattached
-  [handle interface-num]
-  (when (and handle interface-num (must-detach? handle interface-num))
-    (assert (== (LibUsb/attachKernelDriver handle interface-num) LibUsb/SUCCESS)
-            "Unable to re-attach USB kernel driver")))
-
-(declare device-descriptor decode-bcd usb-version)
-
-(defn usb-device
+(defn descriptor
   [device]
-  (let [handle (volatile! nil)
-        interface (volatile! nil)]
-    (reify 
-      clojure.lang.IDeref
-      (deref [_] device)
-
-      UsbDevice
-      (open [this]
-        (.close this)
-        (assert (== (LibUsb/open device (vreset! handle (DeviceHandle.)))
-                    LibUsb/SUCCESS) "Unable to open USB device handle")
-        this)
-      (open [this interface-num]
-        (let [handle (do (open this) @handle)
-              interface-num (vreset! interface interface-num)]
-          (ensure-kernel-detached handle interface-num)
-          (assert (== (LibUsb/claimInterface handle interface-num)
-                      LibUsb/SUCCESS) "Unable to claim USB interface")
-          this))
-
-      java.io.Closeable
-      (close [_]
-        (when-let [i @interface]
-          (LibUsb/releaseInterface @handle i)
-          (ensure-kernel-reattached @handle i)
-          (vreset! interface nil))
-        (when-let [h @handle]
-          (LibUsb/close h)
-          (vreset! handle nil)))
-
-      clojure.lang.ILookup
-      (valAt [this key] (.valAt this key nil))
-      (valAt [this key not-found]
-        (let [d (device-descriptor this)]
-          (case key
-            :spec (decode-bcd (.bcdDevice d))
-            :device (decode-bcd (.bcdUSB d))
-            :device-class (.bDeviceClass d)
-            :device-subclass (.bDeviceSubClass d)
-            :vendor-id (.idVendor d)
-            :product-id (.idProduct d)
-            not-found))))))
-
-(defn devices
-  []
-  (let [device-list (DeviceList.)
-        result (assert (>= (LibUsb/getDeviceList nil device-list) 0)
-                       "Unable to load USB devices")
-        usb-devices (into [] (map usb-device) device-list)]
-    (LibUsb/freeDeviceList device-list true)
-    usb-devices))
-
-(defn device-descriptor
-  [device]
-  (let [descriptor (org.usb4java.DeviceDescriptor.)]
-    (assert (== (LibUsb/getDeviceDescriptor device descriptor) LibUsb/SUCCESS)
-            "Unable to read device descriptor")
-    descriptor))
+  (let [d (org.usb4java.DeviceDescriptor.)]
+    (LibUsb/getDeviceDescriptor device d)
+    d))
 
 (defmethod print-method org.usb4java.Device
-  [device writer]
-  (.write writer (.dump (device-descriptor device))))
+  [x writer]
+  (.write writer (.dump (descriptor x))))
 
-(defn decode-bcd
-  [bcd]
-  (org.usb4java.DescriptorUtils/decodeBCD bcd))
-
-(defn usb-version
+(defn kinect?
   [device]
-  (decode-bcd (.bcdUSB (device-descriptor @device))))
+  (let [d (descriptor device)]
+    (and (== (:vendor-id kinect-usb-device) (.idVendor d))
+         (== (:product-id kinect-usb-device) (.idProduct d)))))
 
-(defn usb3-devices
-  []
-  (into [] (filter #(= (usb-version %) "3.00")) (devices)))
+(defn max-iso-packet-size
+  ([] (max-iso-packet-size *kinect*))
+  ([device] (max-iso-packet-size device (unchecked-byte 0x81)))
+  ([device endpoint]
+     (LibUsb/getMaxIsoPacketSize device endpoint)))
 
-(defn hotplug-event-stream
-  [xform]
-  (assert (LibUsb/hasCapability LibUsb/CAP_HAS_HOTPLUG)
-          "The current machine does not support hotplugged USB devices")
+(defmacro with-handle
+  [device & body]
+  `(binding [*handle* (org.usb4java.DeviceHandle.)]
+     (LibUsb/open ~device *handle*)
+     (let [ret# (do ~@body)]
+       (LibUsb/close *handle*)
+       ret#)))
 
-  (let [out (chan 1 xform)]
-    (future
-      (let [cb (reify HotplugCallback
-                 (processEvent [this ctx device event user-data]
-                   (put! out (usb-device device))
-                   (int 0)))
-            cb-handle (HotplugCallbackHandle.)
-            result (LibUsb/hotplugRegisterCallback
-                    ctx
-                    (bit-or LibUsb/HOTPLUG_EVENT_DEVICE_ARRIVED
-                            LibUsb/HOTPLUG_EVENT_DEVICE_LEFT)
-                    LibUsb/HOTPLUG_ENUMERATE
-                    LibUsb/HOTPLUG_MATCH_ANY
-                    LibUsb/HOTPLUG_MATCH_ANY
-                    LibUsb/HOTPLUG_MATCH_ANY
-                    cb nil cb-handle)]
-        (assert (== result LibUsb/SUCCESS) "Unable to configure hotplug")
-        (while (not (impl/closed? out))
-          (assert (== (LibUsb/handleEventsTimeout ctx 1000000)
-                      LibUsb/SUCCESS) "libusb event handler failed"))
-        (println "Deregistering libusb event handler...")
-        (LibUsb/hotplugDeregisterCallback ctx cb-handle)))
-    out))
+(defmacro with-kinect
+  [& body]
+  `(with-context
+     (with-devices devices#
+       (binding [*kinect* (first (filter kinect? devices#))]
+         (with-handle *kinect*
+           (let [ret# (do ~@body)]
+             ret#))))))

@@ -2,23 +2,17 @@
   (:gen-class)
   (:require [clojure.core.async :refer :all
              :exclude [map into reduce merge take partition partition-by]]
-            [kinect.usb :as usb]))
-
-(def kinect-usb-device
-  {:vendor-id 0x045E
-   :product-id 0x02D8})
-
-(defn kinect?
-  [device]
-  (and (= (:vendor-id device) 0x045E)
-       (= (:product-id device) 0x02D8)))
+            [kinect.usb :as usb :refer [*kinect*]])
+  (:import org.usb4java.LibUsb))
 
 (defn -main
   [& args]
-  (usb/init)
-  (let [in (usb/hotplug-event-stream (comp (filter kinect?)
-                                           (map #(doto % println))))]
-    (println "Press enter to exit the program")
-    (read-line)
-    (close! in)
-    (usb/exit)))
+  (usb/with-kinect
+    (let [address (LibUsb/getDeviceAddress *kinect*)
+          bus-number (LibUsb/getBusNumber *kinect*)
+          descriptor (org.usb4java.DeviceDescriptor.)
+          _ (LibUsb/getDeviceDescriptor *kinect* descriptor)
+          vendor-id (.idVendor descriptor)
+          product-id (.idProduct descriptor)
+          fmt "Bus %03d, Address %03d: Vendor %04x, Product %04x%n"]
+      (printf fmt bus-number address vendor-id product-id))))
