@@ -9,6 +9,11 @@
                          HotplugCallback HotplugCallbackHandle
                          DeviceDescriptor Transfer TransferCallback)))
 
+(def ^:dynamic *kinect* nil)
+(def ^:dynamic *context* nil)
+(def ^:dynamic *handle* nil)
+(def ^:dynamic *interface* nil)
+
 (def kinect-usb-device
   {:vendor-id 0x045e
    :product-id 0x02c4
@@ -18,11 +23,6 @@
    :rgb-transfer-in-interface 0x83
    :unknown-interrupt-interface 0x82
    :isochronous-ir-transfer-in-interface 0x84})
-
-(def ^:dynamic *kinect* nil)
-(def ^:dynamic *context* nil)
-(def ^:dynamic *handle* nil)
-(def ^:dynamic *interface* nil)
 
 (defn assert-success
   [code]
@@ -76,11 +76,30 @@
        (LibUsb/close *handle*)
        ret#)))
 
+(definline detach?
+  [interface]
+  `(and (LibUsb/hasCapability LibUsb/CAP_SUPPORTS_DETACH_KERNEL_DRIVER)
+        (LibUsb/kernelDriverActive *handle* ~interface)))
+
+(defmacro with-interface
+  [interface & body]
+  `(let [bool# ~(detach? interface)]
+     (when bool#
+       (assert-success (LibUsb/detachKernelDriver *handle* ~interface)))
+     (assert-success (LibUsb/claimInterface *handle* ~interface))
+     (let [ret# (do ~@body)]
+       (when bool#
+         (assert-success (LibUsb/attachKernelDriver *handle* ~interface)))
+       (assert-success (LibUsb/releaseInterface *handle* ~interface))
+       ret#)))
+
 (defmacro with-kinect
   [& body]
   `(with-context
      (with-devices devices#
        (binding [*kinect* (first (filter kinect? devices#))]
          (with-handle *kinect*
-           (let [ret# (do ~@body)]
-             ret#))))))
+           (with-interface 0
+             (with-interface 1
+               (let [ret# (do ~@body)]
+                 ret#))))))))
