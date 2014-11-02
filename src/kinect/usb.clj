@@ -132,7 +132,7 @@
 
 (defn set-video-transfer-function-enabled
   [enabled?]
-  (let [opts (bit-or 0 1 2)
+  (let [opts (bit-or 0 (if-not enabled? 1 0) (if-not enabled? 2 0))
         code (LibUsb/controlTransfer *handle*
                                      LibUsb/RECIPIENT_INTERFACE
                                      LibUsb/REQUEST_SET_FEATURE
@@ -200,6 +200,10 @@
                             (enable-power-states)
                             (set-video-transfer-function-enabled false)
                             (ir-max-iso-packet-size)
+                            (set-video-transfer-function-enabled true)
+                            ;; (set-ir-interface-enabled true)
                             ~@body)))]
+           ;; (set-ir-interface-enabled false)
+           (set-video-transfer-function-enabled false)
            (LibUsb/close *handle*)
            ret#)))))
