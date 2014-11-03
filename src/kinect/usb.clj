@@ -143,8 +143,13 @@
 
 (defn reset-kinect
   []
-  (doto (LibUsb/openDeviceWithVidPid nil 0x045e 0x02c4)
-    (LibUsb/resetDevice)))
+  (let [handle (LibUsb/openDeviceWithVidPid nil 0x045e 0x02c4)]
+    (try
+      (assert (>= (LibUsb/resetDevice handle) 0))
+      handle
+      (catch Throwable t
+        (LibUsb/close handle)
+        (throw t)))))
 
 (defmacro with-companion-descriptor
   [[binding endpoint-desc] & body]
@@ -194,7 +199,8 @@
   (let [transferred (IntBuffer/allocate 1)]
     (assert-success (LibUsb/bulkTransfer *handle* cmd/outbound-endpoint
                                          (.nioBuffer data) transferred 1000))
-    (assert (== (.get transferred) size) "Transferred byte mismatch")))
+    (log/info "transferred: " (.get transferred) "bytes")
+    #_(assert (== (.get transferred) size) "Transferred byte mismatch")))
 
 (def ^:const response-complete-length 16)
 (def ^:const response-complete-code 0x0A6FE000)
