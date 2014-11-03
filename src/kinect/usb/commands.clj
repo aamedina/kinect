@@ -1,8 +1,14 @@
 (ns kinect.usb.commands
   (:require [clojure.tools.logging :as log])
-  (:import java.util.concurrent.atomic.AtomicInteger))
+  (:import java.util.concurrent.atomic.AtomicInteger
+           (io.netty.buffer ByteBuf Unpooled)
+           (java.nio ByteBuffer IntBuffer)
+           org.usb4java.LibUsb))
 
 (def ^:dynamic *sequence* nil)
+
+(def ^:const inbound-endpoint (unchecked-byte 0x81))
+(def ^:const outbound-endpoint 0x02)
 
 (defmacro with-sequence
   [& body]
@@ -78,4 +84,16 @@
 
 (defmethod max-response-length :unknown
   [command]
-  (log/info "Unknown command: " command))
+  (throw (ex-info "Unknown command" command)))
+
+(defn response-buf
+  [command]
+  (Unpooled/directBuffer (max-response-length command)))
+
+(defn command
+  [op]
+  (let [size (max-response-length {:op op})]
+    {:op op
+     :size size
+     :data (Unpooled/directBuffer size)
+     :sequence (.getAndIncrement *sequence*)}))

@@ -2,8 +2,9 @@
   (:require [clojure.core.async :refer :all
              :exclude [map into reduce merge take partition partition-by]]
             [clojure.core.async.impl.protocols :as impl]
-            [clojure.tools.logging :as log])
-  (:import (java.nio ByteBuffer ByteOrder)
+            [clojure.tools.logging :as log]
+            [kinect.usb.commands :as cmd])
+  (:import (java.nio ByteBuffer ByteOrder IntBuffer)
            (io.netty.buffer ByteBuf Unpooled ByteBufUtil)
            (org.usb4java LibUsb Device DeviceList DeviceHandle
                          HotplugCallback HotplugCallbackHandle
@@ -188,21 +189,55 @@
   [enabled?]
   (assert-success (LibUsb/setInterfaceAltSetting *handle* 1 (if enabled? 1 0))))
 
+(defn send!
+  [{:keys [data size] :as command}]
+  (let [transferred (IntBuffer/allocate 1)]
+    (assert-success (LibUsb/bulkTransfer *handle* cmd/outbound-endpoint
+                                         (.nioBuffer data) transferred 1000))
+    (assert (== (.get transferred) size) "Transferred byte mismatch")))
+
+(def ^:const response-complete-length 16)
+(def ^:const response-complete-code 0x0A6FE000)
+
+(defn complete?
+  [buf]
+  (and (== (.readableBytes buf) response-complete-length)
+       (== (.readUnsignedInt buf) response-complete-code)
+       (== (.readUnsignedInt buf) cmd/*sequence*)))
+
+(defn receive!
+  [buf]
+  (let [received (IntBuffer/allocate 1)]
+    (assert-success (LibUsb/bulkTransfer *handle* cmd/inbound-endpoint
+                                         (.nioBuffer buf) received 1000))))
+
+(defn exec
+  [command]
+  (send! command)
+  (when (pos? (cmd/max-response-length command))
+    (receive! (:data command)))
+  (let [complete-result (Unpooled/directBuffer response-complete-length)]
+    (receive! complete-result)
+    (assert (complete? complete-result) "Command did not complete")
+    complete-result))
+
 (defmacro with-kinect
   [& body]
   `(with-context
      (binding [*handle* (reset-kinect)]
        (binding [*kinect* (LibUsb/getDevice *handle*)]
-         (let [ret# (do (with-interface 0
-                          (with-interface 1
-                            (set-isochronous-delay)
-                            (set-ir-interface-enabled false)
-                            (enable-power-states)
-                            (set-video-transfer-function-enabled false)
-                            (ir-max-iso-packet-size)
-                            (set-video-transfer-function-enabled true)
-                            ;; (set-ir-interface-enabled true)
-                            ~@body)))]
+         (let [ret# (cmd/with-sequence
+                      (with-interface 0
+                        (with-interface 1
+                          (set-isochronous-delay)
+                          (set-ir-interface-enabled false)
+                          (enable-power-states)
+                          (set-video-transfer-function-enabled false)
+                          (ir-max-iso-packet-size)
+                          (set-video-transfer-function-enabled true)
+                          ;; (exec (cmd/command :read-firmware-versions))
+                          ;; (set-ir-interface-enabled true)
+                          ~@body)))]
            ;; (set-ir-interface-enabled false)
            (set-video-transfer-function-enabled false)
            (LibUsb/close *handle*)
