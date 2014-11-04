@@ -98,7 +98,8 @@
     :read-serial-number 0x80
     :read-p0-tables 0x1c0000
     :read-depth-camera-parameters 0x1c0000
-    :read-rgb-camera-parameters 0x1c0000))
+    :read-rgb-camera-parameters 0x1c0000
+    :unknown-one 000))
 
 (defn opcode
   [op]
@@ -106,7 +107,7 @@
     :read-firmware-versions 0x02 
     :init-streams 0x09
     :read-data 0x14 
-    :read-status 0x16 
+    :read-status 0x16
     :read-data-page 0x22 
     :read-data-stream 0x26 
     :set-streaming 0x2b 
@@ -114,7 +115,8 @@
     :read-serial-number 0x22
     :read-p0-tables 0x22
     :read-depth-camera-parameters 0x22
-    :read-rgb-camera-parameters 0x22))
+    :read-rgb-camera-parameters 0x22
+    :unknown-one 0x46))
 
 (defn command
   [op sequence & parameters]
@@ -125,7 +127,7 @@
                (.writeInt (opcode op))
                (.writeInt 0))]
     (doseq [parameter parameters]
-      (.writeInt parameter))
+      (.writeInt data parameter))
     {:op op
      :size (max-response-length op)
      :sequence sequence
@@ -170,9 +172,17 @@
       (exec handle (command :read-firmware-versions
                             (.getAndIncrement sequence)))
       (exec handle (command :read-data (.getAndIncrement sequence)))
-      (exec handle (command :read-serial-number (.getAndIncrement sequence)))
+      (exec handle (command :read-serial-number (.getAndIncrement sequence) 1))
       (exec handle (command :read-depth-camera-parameters
-                            (.getAndIncrement sequence)))
+                            (.getAndIncrement sequence) 2))
+      (exec handle (command :read-p0-tables (.getAndIncrement sequence) 3))
+      (exec handle (command :read-rgb-camera-parameters
+                            (.getAndIncrement sequence) 4))
+      (exec handle (command :read-status (.getAndIncrement sequence) 0x090000))
+      (exec handle (command :init-streams (.getAndIncrement sequence)))
+      (configure-infrared handle true)
+      (exec handle (command :read-status (.getAndIncrement sequence) 0x090000))
+      (exec handle (command :set-streaming (.getAndIncrement sequence) 1))
       (assoc this
         :device device
         :handle handle
@@ -180,6 +190,9 @@
   (stop [this]
     (log/info "Stopping Kinect...")
     (configure-infrared handle false)
+    (exec handle (command :unknown-one (.getAndIncrement sequence)
+                          0x00 0x00003840 0x00000037 0x00))
+    (exec handle (command :set-streaming (.getAndIncrement sequence) 0))
     (configure-rgb handle false)
     (log/info "Closing Kinect...")
     (usb/assert-success (LibUsb/releaseInterface handle 0))
