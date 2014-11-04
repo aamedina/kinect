@@ -99,7 +99,7 @@
     :read-p0-tables 0x1c0000
     :read-depth-camera-parameters 0x1c0000
     :read-rgb-camera-parameters 0x1c0000
-    :unknown-one 000))
+    :unknown-one 0x00))
 
 (defn opcode
   [op]
@@ -116,7 +116,7 @@
     :read-p0-tables 0x22
     :read-depth-camera-parameters 0x22
     :read-rgb-camera-parameters 0x22
-    :unknown-one 0x46))
+    :unknown-one 0x0a))
 
 (defn command
   [op sequence & parameters]
@@ -139,18 +139,20 @@
        (== (.readInt data) sequence)))
 
 (defn exec
-  ([cmd] (exec (:handle *kinect*) cmd))
+  ([cmd] )
   ([handle {:keys [op size data sequence] :as cmd}]
      (write! handle data)
-     (let [data (read! handle size)
+     (let [data (when (pos? size)
+                  (read! handle size))
            result (read! handle 16)]
-       (log/info (ByteBufUtil/hexDump data))
+       (when (pos? size)
+         (log/info (ByteBufUtil/hexDump data)))
        (log/info (ByteBufUtil/hexDump result))
        (when (complete? result sequence)
          (log/info op "completed successfully")
          data))))
 
-(defrecord Kinect [device handle]
+(defrecord Kinect [device handle sequence]
   Lifecycle
   (start [this]
     (LibUsb/init nil)
@@ -174,8 +176,8 @@
       (exec handle (command :read-data (.getAndIncrement sequence)))
       (exec handle (command :read-serial-number (.getAndIncrement sequence) 1))
       (exec handle (command :read-depth-camera-parameters
-                            (.getAndIncrement sequence) 2))
-      (exec handle (command :read-p0-tables (.getAndIncrement sequence) 3))
+                            (.getAndIncrement sequence) 3))
+      (exec handle (command :read-p0-tables (.getAndIncrement sequence) 2))
       (exec handle (command :read-rgb-camera-parameters
                             (.getAndIncrement sequence) 4))
       (exec handle (command :read-status (.getAndIncrement sequence) 0x090000))
@@ -190,8 +192,7 @@
   (stop [this]
     (log/info "Stopping Kinect...")
     (configure-infrared handle false)
-    (exec handle (command :unknown-one (.getAndIncrement sequence)
-                          0x00 0x00003840 0x00000037 0x00))
+    (exec handle (command :unknown-one (.getAndIncrement sequence)))
     (exec handle (command :set-streaming (.getAndIncrement sequence) 0))
     (configure-rgb handle false)
     (log/info "Closing Kinect...")
@@ -204,7 +205,7 @@
       :device nil
       :handle nil)))
 
-(def ^:dynamic *kinect* (Kinect. nil nil))
+(def ^:dynamic *kinect* (Kinect. nil nil nil))
 
 (defmacro with-kinect
   [& body]
