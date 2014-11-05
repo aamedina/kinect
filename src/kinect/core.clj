@@ -8,7 +8,7 @@
            (java.nio ByteBuffer ByteOrder IntBuffer)
            (java.util.concurrent.atomic AtomicInteger)))
 
-(declare *kinect*)
+(declare ^:dynamic *kinect*)
 
 (def ^:const vendor-id 0x045e)
 (def ^:const product-id 0x02c4)
