@@ -90,14 +90,41 @@
 (def ^:const rgb-packet-size (+ (* 1920 1080 3) 20))
 
 (defn read-rgb!
-  [handle]
-  (read! handle rgb-in rgb-packet-size 1000))
+  ([] (read-rgb! (:handle *kinect*)))
+  ([handle] (read! handle rgb-in rgb-packet-size 1000)))
 
 (def ^:const infrared-packet-size (+ (* 1920 1080 3) 20))
 
 (defn read-infrared!
-  [handle]
-  (read! handle infrared-in infrared-packet-size 1000))
+  ([] (read-infrared! (:handle *kinect*)))
+  ([handle] (read! handle infrared-in infrared-packet-size 1000)))
+
+(def ^:const threads (.availableProcessors (Runtime/getRuntime)))
+
+(defn stream-rgb!
+  ([] (stream-rgb! (:handle *kinect*)))
+  ([handle] (stream-rgb! handle 24))
+  ([handle fps] (stream-rgb! handle fps 1000))
+  ([handle fps ^long max-frames]
+     (let [agents (repeatedly threads #(agent []))
+           throttle (/ 1000.0 fps)]
+       (loop [frame 0
+              [a & more] (cycle agents)
+              images []]
+         (if (>= frame max-frames)
+           (into [] (map deref) images)
+           (let [image (promise)]
+             (Thread/sleep 5)
+             (send a (fn [_]
+                       (loop []
+                         (if (zero? (LibUsb/tryLockEvents nil))
+                           (if (zero? (LibUsb/eventHandlingOk nil))
+                             (do (LibUsb/unlockEvents nil)
+                                 (recur))
+                             (do (deliver image (read-rgb! handle))
+                                 (LibUsb/unlockEvents nil)))
+                           (recur)))))
+             (recur (inc frame) more (conj images image))))))))
 
 (defn max-response-length
   [op]
@@ -251,7 +278,7 @@
 
 (defn spit-rgb
   []
-  (let [buf (read-infrared! (:handle *kinect*))
+  (let [buf (read-rgb! (:handle *kinect*))
         bytes (byte-array (.readableBytes buf))]
     (.readBytes buf bytes)
     (when (pos? (alength bytes))
