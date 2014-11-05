@@ -75,8 +75,7 @@
   (let [transferred (IntBuffer/allocate 1)]
     (usb/assert-success
      (LibUsb/bulkTransfer handle control-out (.nioBuffer data)
-                          transferred 1000))
-    (log/info "Wrote" (.get transferred) "bytes to Kinect")))
+                          transferred 1000))))
 
 (defn read!
   [handle endpoint size timeout]
@@ -159,9 +158,6 @@
      (let [data (when (pos? size)
                   (read! handle control-in size 1000))
            result (read! handle control-in 16 1000)]
-       (when (pos? size)
-         (log/info (ByteBufUtil/hexDump data)))
-       (log/info (ByteBufUtil/hexDump result))
        (when (complete? result sequence)
          (log/info op "completed successfully")
          data))))
@@ -232,11 +228,11 @@
 (defn -main
   [& args]
   (with-kinect
-    (let [{:keys [handle]} *kinect*]
+    (let [handle (:handle *kinect*)]
       (try
         (let [buf (read-rgb! handle)
               bytes (byte-array (.readableBytes buf))]
-          (.readBytes bytes)
-          (spit "resources/rgb-image" bytes))
+          (.readBytes buf bytes)
+          (spit "target/rgb-image" bytes))
         (catch Throwable t
           (log/error t))))))
