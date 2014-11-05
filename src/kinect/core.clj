@@ -79,23 +79,24 @@
     (log/info "Wrote" (.get transferred) "bytes to Kinect")))
 
 (defn read!
-  [handle size]
+  [handle endpoint size timeout]
   (let [buffer (.order (ByteBuffer/allocateDirect size) ByteOrder/LITTLE_ENDIAN)
         transferred (IntBuffer/allocate 1)]
     (usb/assert-success
-     (LibUsb/bulkTransfer handle control-in buffer transferred 1000))
+     (LibUsb/bulkTransfer handle endpoint buffer transferred timeout))
     (.order (Unpooled/wrappedBuffer buffer) ByteOrder/LITTLE_ENDIAN)))
 
 (def ^:const rgb-packet-size (+ (* 1920 1080 3) 20))
 
 (defn read-rgb!
   [handle]
-  (let [buffer (.order (ByteBuffer/allocateDirect rgb-packet-size)
-                       ByteOrder/LITTLE_ENDIAN)
-        transferred (IntBuffer/allocate 1)]
-    (usb/assert-success
-     (LibUsb/bulkTransfer handle rgb-in buffer transferred 1000))
-    (.order (Unpooled/wrappedBuffer buffer) ByteOrder/LITTLE_ENDIAN)))
+  (read! handle rgb-in rgb-packet-size 1000))
+
+(def ^:const infrared-packet-size (+ (* 1920 1080 3) 20))
+
+(defn read-infrared!
+  [handle]
+  (read! handle infrared-in infrared-packet-size 1000))
 
 (defn max-response-length
   [op]
@@ -152,12 +153,12 @@
        (== (.readInt data) sequence)))
 
 (defn exec
-  ([cmd] )
+  ([cmd] (exec (:handle *kinect*) cmd))
   ([handle {:keys [op size data sequence] :as cmd}]
      (write! handle data)
      (let [data (when (pos? size)
-                  (read! handle size))
-           result (read! handle 16)]
+                  (read! handle control-in size 1000))
+           result (read! handle control-in 16 1000)]
        (when (pos? size)
          (log/info (ByteBufUtil/hexDump data)))
        (log/info (ByteBufUtil/hexDump result))
@@ -216,7 +217,8 @@
     (LibUsb/exit nil)
     (assoc this
       :device nil
-      :handle nil)))
+      :handle nil
+      :sequence nil)))
 
 (def ^:dynamic *kinect* (Kinect. nil nil nil))
 
