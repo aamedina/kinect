@@ -8,6 +8,8 @@
            (java.nio ByteBuffer ByteOrder IntBuffer)
            (java.util.concurrent.atomic AtomicInteger)))
 
+(declare *kinect*)
+
 (def ^:const vendor-id 0x045e)
 (def ^:const product-id 0x02c4)
 (def ^:const control-in (unchecked-byte 0x81))
@@ -82,6 +84,17 @@
         transferred (IntBuffer/allocate 1)]
     (usb/assert-success
      (LibUsb/bulkTransfer handle control-in buffer transferred 1000))
+    (.order (Unpooled/wrappedBuffer buffer) ByteOrder/LITTLE_ENDIAN)))
+
+(def ^:const rgb-packet-size (+ (* 1920 1080 3) 20))
+
+(defn read-rgb!
+  [handle]
+  (let [buffer (.order (ByteBuffer/allocateDirect rgb-packet-size)
+                       ByteOrder/LITTLE_ENDIAN)
+        transferred (IntBuffer/allocate 1)]
+    (usb/assert-success
+     (LibUsb/bulkTransfer handle rgb-in buffer transferred 1000))
     (.order (Unpooled/wrappedBuffer buffer) ByteOrder/LITTLE_ENDIAN)))
 
 (defn max-response-length
