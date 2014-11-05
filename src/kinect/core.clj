@@ -232,4 +232,11 @@
 (defn -main
   [& args]
   (with-kinect
-    (log/info *kinect*)))
+    (let [{:keys [handle]} *kinect*]
+      (try
+        (let [buf (read-rgb! handle)
+              bytes (byte-array (.readableBytes buf))]
+          (.readBytes bytes)
+          (spit "resources/rgb-image" bytes))
+        (catch Throwable t
+          (log/error t))))))
