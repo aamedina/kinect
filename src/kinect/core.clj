@@ -85,7 +85,9 @@
         transferred (IntBuffer/allocate 1)]
     (usb/assert-success
      (LibUsb/bulkTransfer handle endpoint buffer transferred timeout))
-    (.order (Unpooled/wrappedBuffer buffer) ByteOrder/LITTLE_ENDIAN)))
+    (-> (Unpooled/wrappedBuffer buffer)
+        (.slice 0 (.get transferred))
+        (.order ByteOrder/LITTLE_ENDIAN))))
 
 (def ^:const rgb-packet-size (+ (* 1920 1080 3) 20))
 
@@ -93,28 +95,44 @@
   ([] (read-rgb! (:handle *kinect*)))
   ([handle] (read! handle rgb-in rgb-packet-size 1000)))
 
-(def ^:const infrared-packet-size (+ (* 1920 1080 3) 20))
+(def ^:const infrared-packet-size 0x8400)
+
+(def ^:const threads (.availableProcessors (Runtime/getRuntime)))
 
 (defn read-infrared!
   ([] (read-infrared! (:handle *kinect*)))
-  ([handle] (read! handle infrared-in infrared-packet-size 1000)))
-
-(def ^:const threads (.availableProcessors (Runtime/getRuntime)))
+  ([handle]
+     (let [buffer (ByteBuffer/allocateDirect (* 80 8 infrared-packet-size))
+           cb (reify org.usb4java.TransferCallback
+                (processTransfer [this transfer]
+                  (LibUsb/freeTransfer transfer)))]
+       (dotimes [i 80]
+         (let [transfer (doto (LibUsb/allocTransfer 8)
+                          (LibUsb/fillIsoTransfer
+                           handle infrared-in buffer
+                           8 cb nil 1000)
+                          (.setType LibUsb/TRANSFER_TYPE_ISOCHRONOUS)
+                          (LibUsb/setIsoPacketLengths infrared-packet-size))]
+           (LibUsb/submitTransfer transfer)
+           (LibUsb/controlTransfer handle )
+           (while (not (== (.status transfer) LibUsb/TRANSFER_COMPLETED))
+             )))
+       #_(-> (Unpooled/wrappedBuffer buffer)
+           (.slice 0 (.actualLength transfer))
+           (.order ByteOrder/LITTLE_ENDIAN)))))
 
 (defn stream-rgb!
   ([] (stream-rgb! (:handle *kinect*)))
   ([handle] (stream-rgb! handle 24))
-  ([handle fps] (stream-rgb! handle fps 1000))
+  ([handle fps] (stream-rgb! handle fps 48))
   ([handle fps ^long max-frames]
-     (let [agents (repeatedly threads #(agent []))
-           throttle (/ 1000.0 fps)]
+     (let [agents (repeatedly threads #(agent []))]
        (loop [frame 0
               [a & more] (cycle agents)
               images []]
          (if (>= frame max-frames)
            (into [] (map deref) images)
            (let [image (promise)]
-             (Thread/sleep 5)
              (send a (fn [_]
                        (loop []
                          (if (zero? (LibUsb/tryLockEvents nil))
@@ -297,4 +315,5 @@
             (with-open [os (io/output-stream "target/rgb-image")]
               (.write os bytes))))
         (catch Throwable t
-          (log/error t))))))
+          (log/error t)))))
+  (shutdown-agents))
