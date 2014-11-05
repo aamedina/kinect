@@ -1,6 +1,8 @@
 (ns kinect.core
   (:gen-class)
   (:require [clojure.tools.logging :as log]
+            [clojure.tools.namespace.repl :refer [refresh]]
+            [clojure.java.io :as io]
             [com.stuartsierra.component :as c :refer [Lifecycle]]
             [kinect.usb :as usb])
   (:import (org.usb4java LibUsb)
@@ -216,7 +218,7 @@
       :handle nil
       :sequence nil)))
 
-(def ^:dynamic *kinect* (Kinect. nil nil nil))
+(defonce ^:dynamic *kinect* (Kinect. nil nil nil))
 
 (defmacro with-kinect
   [& body]
@@ -224,6 +226,37 @@
      (let [ret# (do ~@body)]
        (c/stop *kinect*)
        ret#)))
+
+(defn start
+  []
+  (alter-var-root #'*kinect* c/start))
+
+(defn stop
+  []
+  (alter-var-root #'*kinect* c/stop))
+
+(defn reset
+  []
+  (stop)
+  (refresh :after 'kinect.core/start))
+
+(defn spit-infrared
+  []
+  (let [buf (read-infrared! (:handle *kinect*))
+        bytes (byte-array (.readableBytes buf))]
+    (.readBytes buf bytes)
+    (when (pos? (alength bytes))
+      (with-open [os (io/output-stream "target/infrared-image")]
+        (.write os bytes)))))
+
+(defn spit-rgb
+  []
+  (let [buf (read-infrared! (:handle *kinect*))
+        bytes (byte-array (.readableBytes buf))]
+    (.readBytes buf bytes)
+    (when (pos? (alength bytes))
+      (with-open [os (io/output-stream "target/rgb-image")]
+        (.write os bytes)))))
 
 (defn -main
   [& args]
@@ -233,6 +266,8 @@
         (let [buf (read-rgb! handle)
               bytes (byte-array (.readableBytes buf))]
           (.readBytes buf bytes)
-          (spit "target/rgb-image" bytes))
+          (when (pos? (alength bytes))
+            (with-open [os (io/output-stream "target/rgb-image")]
+              (.write os bytes))))
         (catch Throwable t
           (log/error t))))))
